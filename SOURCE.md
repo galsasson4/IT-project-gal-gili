@@ -2,138 +2,107 @@
 
 Gili Barak, Gal Sasson
 
-## What we want to find out
+Our approved source is the music one: we compare the most popular music videos on YouTube in Israel with the Apple Music top 100 chart in Israel, to see where new songs become hits first and how long it takes them to show up on the other platform.
 
-We want to see where new songs in Israel become hits first, on YouTube or on Apple Music, and how long it takes a song to show up on the other one. We also want to check if Hebrew songs and English songs behave differently.
+## 1. The source
 
-## Sources
+| | YouTube | Apple Music |
+|---|---|---|
+| Name | YouTube Data API v3 - most popular videos, music category, Israel | Apple Music RSS - Most Played Songs, Israel |
+| URL | `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=IL&videoCategoryId=10&maxResults=50&fields=items(id,snippet(publishedAt,channelId,channelTitle,title,defaultAudioLanguage),statistics(viewCount,likeCount,commentCount))&key=API_KEY` | `https://rss.marketingtools.apple.com/api/v2/il/music/most-played/100/songs.json` |
+| Format | JSON | JSON |
+| Key / user | Free API key from Google Cloud. It's kept in `~/.secrets/youtube_key` (outside the project, `chmod 600`) and never goes into the repo | No key, no user |
+| License / terms | YouTube API Services Terms of Service and Developer Policies. Free quota of 10,000 units a day, each call costs 1 unit | Apple Marketing Tools terms. Every response says "Copyright © 2026 Apple Inc. All rights reserved." |
+| Sampling frequency | Every 2 hours (12 a day), because the list changes several times a day | Every 6 hours (4 a day), because the chart updates about once a day and 6 hours tells us roughly when |
 
-**1. YouTube Data API**
+The Apple URL redirects to another address, so it has to be downloaded with `curl -L` (follow redirects).
 
-```
-https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=IL&videoCategoryId=10&maxResults=50&key=API_KEY
-```
+Each run saves one file, `raw/YYYY-MM-DD/HHMM.json` (UTC), with both responses inside: `{"youtube": ..., "apple": ...}`. In runs where Apple isn't sampled, `apple` is `null`. The 4 manual samples we already have (18-21.11) include both.
 
-Returns the 50 most popular music videos in Israel right now, with views, likes and comments for each one. We keep only the fields we need: id, title, channel, publish date, views, likes, comments.
+## 2. What we collect
 
-The list changes a few times a day, so we sample every 2 hours. It needs an API key (free, we opened one on Google Cloud). The key is kept outside the project folder with `chmod 600`.
+From YouTube we get the most popular music videos in Israel at that moment. In all 4 of our samples YouTube returned 30 videos, even though we asked for 50. For each video we get its id, title, channel, upload time, language (when the channel filled it in), and how many views, likes and comments it has right now.
 
-**2. Apple Music top 100 in Israel**
+From Apple Music we get the 100 most played songs in Israel, in chart order. For each song we get its id, name, artist, release date and genres. Apple doesn't give play counts, only the order.
 
-```
-https://rss.marketingtools.apple.com/api/v2/il/music/most-played/100/songs.json
-```
+The view counts and the order of both lists change all the time, and nobody saves them. That's what we collect.
 
-The 100 most played songs on Apple Music in Israel. No key needed. The chart updates about once a day, but we sample every 6 hours so we know more or less when the update happened.
+## 3. Schema (dataset.csv)
 
-**Size:** a YouTube sample is around 10-15KB and an Apple sample around 40KB. For the whole semester that's about 35MB total.
+Every row is one video or one song in one sample. A YouTube run adds 30 rows, an Apple run adds 100 rows.
 
-## Why nobody else has this
+| Column | What's in it | Units / format |
+|---|---|---|
+| `snapshot_utc` | When we collected the sample | ISO 8601, UTC, e.g. `2026-11-21T11:10:00Z` |
+| `source` | Which platform | `youtube` or `apple` |
+| `rank` | Place in the list at that moment (1 is the top) | Integer, 1-30 on YouTube, 1-100 on Apple |
+| `item_id` | Id of the video or the song on its platform | Text |
+| `title` | Video title or song name | Text (UTF-8, can be Hebrew) |
+| `artist` | Channel name on YouTube, artist name on Apple | Text (UTF-8) |
+| `artist_id` | Id of the channel on YouTube / of the artist on Apple | Text |
+| `released` | When the video was uploaded / the song was released | ISO 8601. YouTube has date and time in UTC, Apple has only a date (`YYYY-MM-DD`) |
+| `views` | Views at that moment | Integer, number of views. Empty for Apple |
+| `likes` | Likes at that moment | Integer. Empty for Apple, or if the channel hides likes |
+| `comments` | Comments at that moment | Integer. Empty for Apple, or if comments are off |
+| `genre` | Main genre | Text, e.g. `Pop`. Empty for YouTube, and empty if Apple gives only "Music" |
+| `language` | Language of the song name (not the artist) | `he` if there are Hebrew letters, `ar` if Arabic letters, `en` if only English letters, `other` otherwise |
+| `song_key` | The song name only, cleaned: on YouTube, the part of the title after the first " - " (titles are usually "Artist - Song"); on Apple, `name`. In both we remove anything in brackets ("(Prod. By ...)", "[Official Video]", "(לייב ...)"), "feat./ft./&", punctuation and extra spaces, and lowercase it | Text. Used to match the same song on both platforms |
 
-YouTube only shows what's popular right now and the current view count. There is no way to go back and see how many views a song had last Tuesday, or when exactly it got into the list. There might be sites that archive the Apple chart, but we didn't find anyone who saves both charts side by side, and that comparison is what our project is about.
+## 4. Why these columns
 
-## Sample data
+We kept what we need to answer our question: when a song shows up on each list (`snapshot_utc`, `rank`), what song it is and who sings it (`title`, `artist`, `song_key`), how new it is (`released`), and how fast it gets views on YouTube (`views`, `likes`, `comments`). `genre` and `language` are for checking if Hebrew songs or certain genres behave differently.
 
-What we got when we ran the two URLs from our VM on 7.11.2026 (cut short).
+What we didn't keep, and why:
 
-YouTube:
-```
-{
-  "kind": "youtube#videoListResponse",
-  "items": [
-    {
-      "kind": "youtube#video",
-      "id": "8kjAA-kDhv8",
-      "snippet": {
-        "publishedAt": "2026-10-29T08:00:53Z",
-        "channelId": "UCqwksirKYsda-w1mGWBtPVg",
-        "title": "מור - מטריקס (Prod. By Jo Cohen)",
-        ...
-```
+- `kind`, `etag` (YouTube) and `kind` (Apple, always `songs`) are technical and always the same.
+- `defaultAudioLanguage` - some channels don't fill it in (empty in some of our samples), and Apple doesn't have it at all. Instead we compute `language` the same way for both platforms from the letters in the song name. We use only the song name and not the artist, because channel names mix languages (like "Young Buta | יאנג בוטה") and would give wrong results. We added `ar` because 4 of the 30 videos in one sample were in Arabic.
+- We match songs by song name and not by artist, because in our samples the artist is written differently on each platform ("מור - הערוץ הרשמי" vs "Mor") while the song name is in Hebrew on both ("מטריקס").
+- We do keep `channelId` / `artistId` (as `artist_id`). They don't help match songs between YouTube and Apple, but inside each platform they tell apart two songs with the same name, and they stay the same even if a channel changes its name.
+- `artworkUrl100`, `url`, `artistUrl` and the genre links/ids - links and pictures, not data we analyze.
+- From Apple's `genres` we keep only the first genre that isn't the general "Music" (genre 34), which appears on almost every song.
+- The Apple chart info (`title`, `author`, `links`, `copyright`, `country`, `icon`) is the same in every sample. `updated` turned out to be just the time of our request (in the sample from 11:10 it says 11:10:35), so it doesn't tell us when Apple actually updated the chart.
 
-Apple Music:
-```
-{"feed":{"title":"Top Songs","id":"https://rss.marketingtools.apple.com/api/v2/il/music/most-played/100/songs.json","author":{"name":"Apple","url":"https://www.apple.com/"},"copyright":"Copyright © 2026 Apple Inc. All rights reserved.","country":"il", ...
-```
+## 5. Field names: source → schema
 
-## Raw files
+| Column | YouTube field | Apple field |
+|---|---|---|
+| `snapshot_utc` | not in the data - from the file path `raw/YYYY-MM-DD/HHMM.json` | same |
+| `source` | constant `youtube` | constant `apple` |
+| `rank` | position in `items` (index + 1) | position in `feed.results` (index + 1) |
+| `item_id` | `id` | `id` |
+| `title` | `snippet.title` | `name` |
+| `artist` | `snippet.channelTitle` | `artistName` |
+| `artist_id` | `snippet.channelId` | `artistId` |
+| `released` | `snippet.publishedAt` | `releaseDate` |
+| `views` | `statistics.viewCount` (string → integer) | - |
+| `likes` | `statistics.likeCount` (string → integer) | - |
+| `comments` | `statistics.commentCount` (string → integer) | - |
+| `genre` | - | first `genres[].name` that isn't "Music" |
+| `language` | computed from the song name in `snippet.title` (part after the first " - ") | computed from `name` |
+| `song_key` | computed from `snippet.title` (part after the first " - ") | computed from `name` |
 
-Every run of `collect.sh` saves one file to `raw/YYYY-MM-DD/HHMM.json` (UTC). The file has both responses in it. When it's not an Apple run (Apple is only every 6 hours), the `apple` part is `null`. We did it this way so two files never get the same name.
+## 6. Expected size
 
-## dataset.csv
+Measured on our 4 samples: a file with both platforms is about **107KB** (106,914 bytes on average). Inside it, the YouTube part is about 15KB and the Apple part about 92KB. A run without Apple is about 15KB.
 
-Each row is one song/video in one snapshot.
+We plan to collect for about 10 weeks (70 days).
 
-- `snapshot_utc` - when we collected it (UTC), taken from the file path
-- `source` - `youtube` or `apple`
-- `rank` - place in the chart at that moment (1 is the top)
-- `item_id` - the video id on YouTube, or the song id on Apple
-- `title` - video title or song name
-- `artist` - channel name on YouTube, artist name on Apple
-- `released_utc` - when the video was uploaded / when the song was released
-- `views` - YouTube views at that moment (empty for Apple)
-- `likes` - YouTube likes (empty for Apple, or if the channel hides them)
-- `comments` - YouTube comments (empty for Apple, or if comments are off)
-- `genre` - genre from Apple (empty for YouTube)
-- `language` - `he` if the title or artist has Hebrew letters, `en` if it's only English letters, `other` otherwise
-- `song_key` - artist + title in lowercase, without stuff like "Official Video", so we can match the same song on both platforms
+**raw/:**
+- Per day: 4 runs with both (4 × 107KB) + 8 runs with YouTube only (8 × 15KB) = about 550KB
+- Semester: 550KB × 70 ≈ **38MB**, far below the 500MB limit.
+
+**dataset.csv:**
+- Rows per day: 12 × 30 (YouTube) + 4 × 100 (Apple) = 760
+- Semester: 760 × 70 ≈ 53,000 rows
+- A row is about 250 bytes (titles and artists in Hebrew take 2 bytes per letter)
+- Total: 53,000 × 250 ≈ **13MB**
 
 ## Limitations
 
-- Matching songs between YouTube and Apple won't be perfect. YouTube titles are written however the channel wants, sometimes in Hebrew and sometimes in English. Some songs won't match and some will match wrong.
-- The two charts aren't measured the same way. YouTube gives 50 songs and doesn't say how it ranks them. Apple gives 100 by number of plays.
-- Apple updates only once a day, so on that side we only know the day, not the hour.
+- Matching songs between YouTube and Apple won't be perfect. YouTube titles are written however the channel wants (in our first sample the same song is "מור  - מטריקס (Prod. By Jo Cohen)" on YouTube and "מטריקס" by "Mor" on Apple). Some titles won't follow "Artist - Song", some songs are written in English on one platform and Hebrew on the other, and two different songs with the same name could match wrong. We'll check the matches of the top songs by hand.
+- The two lists aren't measured the same way: YouTube gives 30 videos and doesn't say how it ranks them, Apple gives 100 by plays.
+- Apple's `updated` field doesn't show when the chart really changed, so on the Apple side we only know the chart changed somewhere between two samples.
+- Not everything in YouTube's music category is a song (live shows, compilations), so some videos won't have a match on Apple.
 - The language check is simple and will get mixed or transliterated titles wrong.
-- Not everything in YouTube's music category is a song (live shows, compilations etc.), so some videos won't have a match on Apple.
-- YouTube has a daily quota for the key. 12 calls a day is fine, but a bug could use it up.
 - If a run fails we don't fill the gap, it stays missing.
-
-## Second proposal: weather forecast vs what actually happened
-
-This one is completely different. When the weather app says "rain on Thursday" already on Sunday, how often is it right? We want to find out how many days ahead the forecast for the Tel Aviv area can actually be trusted, and if it's worse for rain than for temperature.
-
-**1. The forecast - MET Norway (the API behind yr.no)**
-
-```
-https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=32.01&lon=34.89
-```
-
-Hourly forecast for the next ~9 days for Ben Gurion airport: temperature, rain, wind, clouds. No key, but they ask that every request sends a name and contact email in the User-Agent, so we run curl with `-A "IT-course-project <our email>"`. The forecast updates about every hour, we sample every 3 hours.
-
-**2. What actually happened - airport weather reports (METAR) from Ben Gurion**
-
-```
-https://aviationweather.gov/api/data/metar?ids=LLBG&format=json
-```
-
-Real measurements from the airport every 30 minutes: temperature, wind, clouds, visibility, and if it's raining. From aviationweather.gov (US government), no key. We sample every 30 minutes so we don't miss a report.
-
-**Size:** a forecast sample is around 30-40KB and a METAR sample is under 1KB. For the whole semester that's about 25MB.
-
-**Why nobody else has this:** the forecast that yr.no showed on Sunday for Thursday gets overwritten every hour, and nobody keeps it. The METAR reports are saved in archives, but that's the "reality" side and that's fine. What's new is putting what was promised next to what happened.
-
-**Problems we already see:** the forecast is for a point and the airport is one station, so rain that falls 5 km away won't count. METAR doesn't say how much rain fell, only if it's raining at that moment, so for rain we'll compare yes/no and not amounts. There are sites that save old weather model runs (like Open-Meteo), but not the exact forecast yr.no showed people.
-
-**Sample data** (8.11.2026, cut short):
-
-Forecast:
-```
-{"type":"Feature","geometry":{"type":"Point","coordinates":[34.89,32.01,41]},"properties":{"meta":{"updated_at":"2026-11-08T11:19:44Z","units":{"air_pressure_at_sea_level":"hPa","air_temperature":"celsius","cloud_area_fraction":"%","precipitation_amount":"mm", ...},"timeseries":[{"time":"2026-11-08T11:00:00Z","data":{"instant": ...
-```
-
-METAR:
-```
-[{"icaoId":"LLBG","receiptTime":"2026-11-08T11:22:05.754Z","obsTime":1794136800,"reportTime":"2026-11-08T11:20:00.000Z","temp":23,"dewp":12,"wdir":280,"wspd":18,"visib":"6+","altim":1018,"metarType":"METAR","rawOb":"METAR LLBG 081120Z 28018KT 9999 BKN044 23/12 Q1018 TEMPO 8000 RA FEW030TCU BKN035","lat":32.011,"lon":34.887,"elev":35,"name":"Tel Aviv/Ben Gurion Arpt, C, IL","cover":"BKN" ...
-```
-
-## Which one we prefer
-
-We prefer the first proposal (YouTube vs Apple Music). It interests us more and it's connected to Israel. The weather one is a strong second choice, because it's "forecast vs reality" and winter is starting so there will be rain to check.
-
-## Still need to check
-
-- YouTube API terms, especially how long we're allowed to keep the data (raw/ is never deleted)
-- Apple RSS terms of use
-- robots.txt for both
-- That 10 samples in a row aren't all the same (we already checked that both URLs return data for Israel, see the samples above)
-- MET Norway and aviationweather.gov terms of use
+- We still need to check how the YouTube Developer Policies about storing API data apply to keeping raw files for the whole semester.
